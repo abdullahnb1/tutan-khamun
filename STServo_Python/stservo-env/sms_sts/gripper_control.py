@@ -19,7 +19,6 @@ from scservo_sdk import *
 DEVICENAME  = '/dev/ttyACM0'    # Check your port (ttyACM0 or ttyACM1)
 BAUDRATE    = 1000000
 
-# Updated based on your configuration:
 ID_RIGHT    = 1                 # Right Gripper Servo
 ID_LEFT     = 2                 # Left Gripper Servo
 
@@ -37,6 +36,12 @@ HOMING_SPEED          = 800     # Slower speed for gentle collision with hard st
 HOMING_LOAD_THRESHOLD = 280     # ST3215 load value indicating a hard stop (Tune this! 0-1000 range)
 OFFSET_DEGREES        = 3.0     # Degrees to back away from the absolute hard stop
 OFFSET_STEPS          = int((OFFSET_DEGREES / 360.0) * 4096)  # Convert degrees to steps (~34 steps)
+
+# --- ORIENTATION SETTINGS ---
+# Since servos are mounted in the same orientation, they move together.
+# If Phase 1 opens the gripper instead of closing it, simply swap these two values (1 and -1).
+CLOSE_DIR = 1   # 1 = CW, -1 = CCW
+OPEN_DIR  = -1  # 1 = CW, -1 = CCW
 
 # Dictionary to store our safe operational limits (Updated by the homing sequence)
 servo_limits = {
@@ -167,20 +172,19 @@ def execute_homing(packetHandler):
     print("\n\n[WARNING] Starting Sensorless Homing Sequence...")
     print("Keep hands clear! Servos will seek hard stops.")
     
-    # Phase 1: Sequential Closing
-    print("\n--- Phase 1: Seeking Inner Limits (Sequential) ---")
-    print("Moving Right Servo (ID 1) Clockwise...")
-    limit1_R = drive_single_until_stop(packetHandler, ID_RIGHT, 1)  # 1 = CW
+    # Phase 1: Sequential Closing (Both moving in the CLOSE_DIR)
+    print("\n--- Phase 1: Seeking Inner Limits (Sequential Closing) ---")
+    print("Moving Right Servo (ID 1) to close position...")
+    limit1_R = drive_single_until_stop(packetHandler, ID_RIGHT, CLOSE_DIR) 
     time.sleep(0.5) # Let mechanical tension release
     
-    print("Moving Left Servo (ID 2) Counter-Clockwise...")
-    limit1_L = drive_single_until_stop(packetHandler, ID_LEFT, -1)  # -1 = CCW
+    print("Moving Left Servo (ID 2) to close position...")
+    limit1_L = drive_single_until_stop(packetHandler, ID_LEFT, CLOSE_DIR) 
     time.sleep(0.5)
     
-    # Phase 2: Simultaneous Opening
-    # Since Right closed CW, it must open CCW (-1). Since Left closed CCW, it must open CW (1).
-    print("\n--- Phase 2: Seeking Outer Limits (Simultaneous) ---")
-    limit2_L, limit2_R = drive_until_stop(packetHandler, 1, -1) 
+    # Phase 2: Simultaneous Opening (Both moving in the OPEN_DIR)
+    print("\n--- Phase 2: Seeking Outer Limits (Simultaneous Opening) ---")
+    limit2_L, limit2_R = drive_until_stop(packetHandler, OPEN_DIR, OPEN_DIR) 
     time.sleep(0.5)
     
     # Calculate absolute Min and Max ranges for each servo based on the two walls they hit
@@ -304,7 +308,7 @@ def main():
                 
             if button_just_pressed(BTN_TRIANGLE, now_ms, 'mode'):
                 single_stick_mode = not single_stick_mode
-                mode_str = "SINGLE-STICK" if single_stick_mode else "DUAL-STICK"
+                mode_str = "SINGLE-STICK (Synchronized)" if single_stick_mode else "DUAL-STICK (Independent)"
                 print(f"\n[MODE] Switched to {mode_str}")
 
             if button_just_pressed(BTN_SQUARE, now_ms, 'quit'):
@@ -319,8 +323,9 @@ def main():
                 left_x = JOY_STATE['axes'].get(AX_LEFT_X, 0.0)
                 
                 if single_stick_mode:
+                    # Both servos move in the same direction because of identical mounting orientation
                     speed_L = int(left_x * current_max)
-                    speed_R = int(-left_x * current_max)
+                    speed_R = int(left_x * current_max)
                 else:
                     right_x = JOY_STATE['axes'].get(AX_RIGHT_X, 0.0)
                     if abs(JOY_STATE['axes'].get(AX_RIGHT_Z, 0.0)) > abs(right_x):

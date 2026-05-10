@@ -16,7 +16,7 @@ from scservo_sdk import *
 # -------------------------------------------------
 # HARDWARE SETTINGS
 # -------------------------------------------------
-DEVICENAME  = '/dev/ttyACM1'    # Check your port (ttyACM0 or ttyACM1)
+DEVICENAME  = '/dev/ttyACM0'    # Check your port (ttyACM0 or ttyACM1)
 BAUDRATE    = 1000000
 
 ID_LEFT     = 1                 # Left Gripper Servo
@@ -37,7 +37,7 @@ HOMING_LOAD_THRESHOLD = 280     # ST3215 load value indicating a hard stop (Tune
 OFFSET_DEGREES        = 3.0     # Degrees to back away from the absolute hard stop
 OFFSET_STEPS          = int((OFFSET_DEGREES / 360.0) * 4096)  # Convert degrees to steps (~34 steps)
 
-# Dictionary to store our safe operational limits
+# Dictionary to store our safe operational limits (Updated by the homing sequence)
 servo_limits = {
     ID_LEFT:  {'min': 0, 'max': 4095},
     ID_RIGHT: {'min': 0, 'max': 4095}
@@ -46,18 +46,27 @@ servo_limits = {
 is_homed = False
 
 # -------------------------------------------------
-# GAMEPAD DEFINITIONS
+# GAMEPAD DEFINITIONS (Linux evdev standards)
 # -------------------------------------------------
+# Modern controllers (Logitech in X-input mode, Xbox, PS) map their face 
+# buttons to cardinal directions in Linux:
+#   BTN_SOUTH = A (Xbox) / Cross (PS)     -> Bottom face button
+#   BTN_EAST  = B (Xbox) / Circle (PS)    -> Right face button
+#   BTN_NORTH = Y (Xbox) / Triangle (PS)  -> Top face button
+#   BTN_WEST  = X (Xbox) / Square (PS)    -> Left face button
+
 AX_LEFT_X  = ecodes.ABS_X
 AX_RIGHT_X = ecodes.ABS_RX
 AX_RIGHT_Z = ecodes.ABS_Z
 
-BTN_SQUARE   = ecodes.BTN_WEST
-BTN_CROSS    = ecodes.BTN_SOUTH
-BTN_TRIANGLE = ecodes.BTN_NORTH
-BTN_L1       = ecodes.BTN_TL
-BTN_R1       = ecodes.BTN_TR
-BTN_SELECT   = ecodes.BTN_SELECT  # Used to trigger manual homing
+BTN_SQUARE   = ecodes.BTN_WEST    # The Left face button (Quit)
+BTN_CROSS    = ecodes.BTN_SOUTH   # The Bottom face button (Emergency Brake)
+BTN_TRIANGLE = ecodes.BTN_NORTH   # The Top face button (Toggle 1-Stick/2-Stick)
+BTN_CIRCLE   = ecodes.BTN_EAST    # The Right face button (Unused currently)
+
+BTN_L1       = ecodes.BTN_TL      # Left Bumper (Decrease Speed)
+BTN_R1       = ecodes.BTN_TR      # Right Bumper (Increase Speed)
+BTN_SELECT   = ecodes.BTN_SELECT  # Select / Back Button (Manual Homing)
 
 JOY = None
 JOY_STATE = {'axes': {}, 'btn': set()}
@@ -67,7 +76,10 @@ last_toggle = {'quit': 0, 'r1': 0, 'l1': 0, 'mode': 0, 'home': 0}
 # -------------------------------------------------
 # TELEMETRY LOGGER SETUP
 # -------------------------------------------------
+# Make sure the 'datas' folder exists in your directory!
+os.makedirs("datas", exist_ok=True)
 LOG_FILE = f"datas/servo_telemetry_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+
 def init_logger():
     with open(LOG_FILE, mode='w', newline='') as file:
         writer = csv.writer(file)
@@ -84,73 +96,97 @@ def log_telemetry(packetHandler, servo_id):
 
     # Ensure all reads were successful before logging
     if res_p == COMM_SUCCESS and res_l == COMM_SUCCESS:
-        # Load value is often signed (direction + magnitude), so we grab absolute magnitude
         load_mag = abs(load) 
         
         with open(LOG_FILE, mode='a', newline='') as file:
             writer = csv.writer(file)
-            writer.writerow([time.time(), servo_id, pos, spd, load_mag, volt, temp])
+            writer.writerow([time.time(), servo_id, pos, spd, load_mag, volt, temp, curr])
         
         return pos, spd, load_mag
     return None, None, None
 
 # -------------------------------------------------
-# SENSORLESS HOMING LOGIC
+# SENSORLESS HOMING LOGIC (Simultaneous & Opposing)
 # -------------------------------------------------
+def drive_until_stop(packetHandler, dir_L, dir_R):
+    """Drives both servos simultaneously until they hit a hard stop (current spike)."""
+    # Start moving both servos
+    packetHandler.WriteSpec(ID_LEFT, HOMING_SPEED * dir_L, ACCEL)
+    packetHandler.WriteSpec(ID_RIGHT, HOMING_SPEED * dir_R, ACCEL)
+    time.sleep(0.3) # Wait for initial starting inertia to settle
+    
+    stop_L, stop_R = False, False
+    spike_L, spike_R = 0, 0
+    pos_L_stop, pos_R_stop = None, None
+    
+    # Keep looping until BOTH servos have hit their respective walls
+    while not (stop_L and stop_R):
+        # Check Left Servo
+        if not stop_L:
+            pos, spd, load = log_telemetry(packetHandler, ID_LEFT)
+            if load is not None and load > HOMING_LOAD_THRESHOLD:
+                spike_L += 1
+                if spike_L >= 3:
+                    packetHandler.WriteSpec(ID_LEFT, 0, ACCEL) # Stop Left
+                    pos_L_stop = pos
+                    stop_L = True
+                    print(f"  > Left  Servo hit hard stop at: {pos_L_stop}")
+            else:
+                spike_L = 0
+                
+        # Check Right Servo
+        if not stop_R:
+            pos, spd, load = log_telemetry(packetHandler, ID_RIGHT)
+            if load is not None and load > HOMING_LOAD_THRESHOLD:
+                spike_R += 1
+                if spike_R >= 3:
+                    packetHandler.WriteSpec(ID_RIGHT, 0, ACCEL) # Stop Right
+                    pos_R_stop = pos
+                    stop_R = True
+                    print(f"  > Right Servo hit hard stop at: {pos_R_stop}")
+            else:
+                spike_R = 0
+                
+        time.sleep(0.01)
+        
+    return pos_L_stop, pos_R_stop
+
+
 def execute_homing(packetHandler):
     global is_homed, servo_limits
     print("\n\n[WARNING] Starting Sensorless Homing Sequence...")
-    print("Keep hands clear! Servos will seek hard stops.")
+    print("Keep hands clear! Servos will seek hard stops simultaneously.")
     
-    for servo_id in [ID_LEFT, ID_RIGHT]:
-        print(f"\n--- Homing Servo ID {servo_id} ---")
-        limits = []
-        
-        # Drive in both directions (+1 CW, -1 CCW)
-        for direction in [1, -1]:
-            dir_str = "CW" if direction == 1 else "CCW"
-            print(f"Seeking {dir_str} limit...")
-            
-            # Start moving slowly
-            packetHandler.WriteSpec(servo_id, HOMING_SPEED * direction, ACCEL)
-            time.sleep(0.3) # Wait for initial starting inertia to settle
-            
-            spike_count = 0
-            while True:
-                pos, spd, load = log_telemetry(packetHandler, servo_id)
-                
-                if load is not None:
-                    if load > HOMING_LOAD_THRESHOLD:
-                        spike_count += 1
-                    else:
-                        spike_count = 0
-                        
-                    # Require 3 consecutive high-load readings to confirm a hard stop
-                    # (Prevents false positives from random noise)
-                    if spike_count >= 3:
-                        packetHandler.WriteSpec(servo_id, 0, ACCEL) # EMERGENCY STOP
-                        print(f"> Hard stop detected at position: {pos} (Load: {load})")
-                        limits.append(pos)
-                        time.sleep(0.5) # Let mechanical tension release
-                        break
-                
-                time.sleep(0.01)
-                
-        # Calculate safe operational bounds
-        raw_min = min(limits)
-        raw_max = max(limits)
-        
-        # Apply the offset to stay slightly away from the physical wall
-        safe_min = raw_min + OFFSET_STEPS
-        safe_max = raw_max - OFFSET_STEPS
-        
-        servo_limits[servo_id]['min'] = safe_min
-        servo_limits[servo_id]['max'] = safe_max
-        
-        print(f"Calibration Complete ID {servo_id}: Safe Range = [{safe_min} to {safe_max}]")
+    # Phase 1: Close Gripper (Left drives CCW, Right drives CW - Adjust signs if backwards)
+    print("\n--- Phase 1: Seeking Inner Limits (Closing) ---")
+    limit1_L, limit1_R = drive_until_stop(packetHandler, -1, 1)
+    time.sleep(0.5) # Let mechanical tension release
+    
+    # Phase 2: Open Gripper (Left drives CW, Right drives CCW)
+    print("\n--- Phase 2: Seeking Outer Limits (Opening) ---")
+    limit2_L, limit2_R = drive_until_stop(packetHandler, 1, -1)
+    time.sleep(0.5)
+    
+    # Calculate absolute Min and Max ranges for each servo based on the two walls they hit
+    raw_min_L = min(limit1_L, limit2_L)
+    raw_max_L = max(limit1_L, limit2_L)
+    
+    raw_min_R = min(limit1_R, limit2_R)
+    raw_max_R = max(limit1_R, limit2_R)
+    
+    # Apply the safety offset (stay 3 degrees away from the absolute walls)
+    servo_limits[ID_LEFT]['min'] = raw_min_L + OFFSET_STEPS
+    servo_limits[ID_LEFT]['max'] = raw_max_L - OFFSET_STEPS
+    
+    servo_limits[ID_RIGHT]['min'] = raw_min_R + OFFSET_STEPS
+    servo_limits[ID_RIGHT]['max'] = raw_max_R - OFFSET_STEPS
+    
+    print("\n--- Calibration Complete ---")
+    print(f"Left  Safe Range: [{servo_limits[ID_LEFT]['min']} to {servo_limits[ID_LEFT]['max']}]")
+    print(f"Right Safe Range: [{servo_limits[ID_RIGHT]['min']} to {servo_limits[ID_RIGHT]['max']}]")
 
     is_homed = True
-    print("\n[SUCCESS] Homing Complete. Returning to manual control.")
+    print("[SUCCESS] Homing Complete. Returning to manual control.")
 
 # -------------------------------------------------
 # JOYSTICK LOGIC
@@ -279,7 +315,7 @@ def main():
 
             # --- SOFTWARE LIMIT ENFORCEMENT ---
             # If position is outside safe bounds, only allow speeds that move it back inside.
-            # Assuming Positive speed (+) INCREASES position, Negative speed (-) DECREASES position.
+            # ST3215 math: Positive speed (+) = increases position (CW). Negative speed (-) = decreases position (CCW).
             
             if pos_L >= servo_limits[ID_LEFT]['max'] and speed_L > 0: speed_L = 0
             if pos_L <= servo_limits[ID_LEFT]['min'] and speed_L < 0: speed_L = 0

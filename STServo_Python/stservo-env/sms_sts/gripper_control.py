@@ -39,14 +39,13 @@ OFFSET_STEPS          = int((OFFSET_DEGREES / 360.0) * 4096)  # Convert degrees 
 
 # --- ORIENTATION SETTINGS ---
 # Since servos are mounted in the same orientation, they move together.
-# If Phase 1 opens the gripper instead of closing it, simply swap these two values (1 and -1).
-CLOSE_DIR = -1   # 1 = CW, -1 = CCW
+CLOSE_DIR = -1   # -1 = CCW, 1 = CW
 OPEN_DIR  = 1    # 1 = CW, -1 = CCW
 
-# Dictionary to store our safe operational limits (Updated by the homing sequence)
+# Dictionary to store the physical hard stops (CW wall and CCW wall)
 servo_limits = {
-    ID_LEFT:  {'min': 0, 'max': 4095},
-    ID_RIGHT: {'min': 0, 'max': 4095}
+    ID_LEFT:  {'cw': None, 'ccw': None},
+    ID_RIGHT: {'cw': None, 'ccw': None}
 }
 
 is_homed = False
@@ -84,7 +83,6 @@ def init_logger():
         writer.writerow(["Timestamp", "ID", "Position", "Speed", "Load", "Voltage", "Temperature", "Current"])
 
 def log_telemetry(packetHandler, servo_id):
-    """Reads all feedback from the servo and writes to CSV."""
     pos, res_p, err = packetHandler.ReadPos(servo_id)
     spd, res_s, err = packetHandler.ReadSpeed(servo_id)
     load, res_l, err = packetHandler.ReadLoad(servo_id)
@@ -106,7 +104,7 @@ def log_telemetry(packetHandler, servo_id):
 def drive_single_until_stop(packetHandler, servo_id, direction):
     """Drives a single servo until it hits a hard stop (current spike)."""
     packetHandler.WriteSpec(servo_id, HOMING_SPEED * direction, ACCEL)
-    time.sleep(0.3) # Wait for initial starting inertia to settle
+    time.sleep(0.3)
     
     spike_count = 0
     pos_stop = None
@@ -116,14 +114,13 @@ def drive_single_until_stop(packetHandler, servo_id, direction):
         if load is not None and load > HOMING_LOAD_THRESHOLD:
             spike_count += 1
             if spike_count >= 3:
-                packetHandler.WriteSpec(servo_id, 0, ACCEL) # Stop Servo
+                packetHandler.WriteSpec(servo_id, 0, ACCEL)
                 pos_stop = pos
                 dir_str = "CW" if direction > 0 else "CCW"
                 print(f"  > Servo ID {servo_id} hit {dir_str} hard stop at: {pos_stop}")
                 break
         else:
             spike_count = 0
-            
         time.sleep(0.01)
         
     return pos_stop
@@ -162,7 +159,6 @@ def drive_until_stop(packetHandler, dir_L, dir_R):
                     print(f"  > Right Servo hit hard stop at: {pos_R_stop}")
             else:
                 spike_R = 0
-                
         time.sleep(0.01)
         
     return pos_L_stop, pos_R_stop
@@ -172,38 +168,33 @@ def execute_homing(packetHandler):
     print("\n\n[WARNING] Starting Sensorless Homing Sequence...")
     print("Keep hands clear! Servos will seek hard stops.")
     
-    # Phase 1: Sequential Closing (Both moving in the CLOSE_DIR)
+    # Phase 1: Sequential Closing
     print("\n--- Phase 1: Seeking Inner Limits (Sequential Closing) ---")
     print("Moving Right Servo (ID 1) to close position...")
-    limit1_R = drive_single_until_stop(packetHandler, ID_RIGHT, OPEN_DIR) 
-    time.sleep(0.5) # Let mechanical tension release
+    limit_close_R = drive_single_until_stop(packetHandler, ID_RIGHT, CLOSE_DIR) 
+    time.sleep(0.5) 
     
     print("Moving Left Servo (ID 2) to close position...")
-    limit1_L = drive_single_until_stop(packetHandler, ID_LEFT, CLOSE_DIR) 
+    limit_close_L = drive_single_until_stop(packetHandler, ID_LEFT, CLOSE_DIR) 
     time.sleep(0.5)
     
-    # Phase 2: Simultaneous Opening (Both moving in the OPEN_DIR)
+    # Phase 2: Simultaneous Opening
     print("\n--- Phase 2: Seeking Outer Limits (Simultaneous Opening) ---")
-    limit2_L, limit2_R = drive_until_stop(packetHandler, OPEN_DIR, CLOSE_DIR) 
+    limit_open_L, limit_open_R = drive_until_stop(packetHandler, OPEN_DIR, OPEN_DIR) 
     time.sleep(0.5)
     
-    # Calculate absolute Min and Max ranges for each servo based on the two walls they hit
-    raw_min_L = min(limit1_L, limit2_L)
-    raw_max_L = max(limit1_L, limit2_L)
-    
-    raw_min_R = min(limit1_R, limit2_R)
-    raw_max_R = max(limit1_R, limit2_R)
-    
-    # Apply the safety offset (stay 3 degrees away from the absolute walls)
-    servo_limits[ID_LEFT]['min'] = raw_min_L + OFFSET_STEPS
-    servo_limits[ID_LEFT]['max'] = raw_max_L - OFFSET_STEPS
-    
-    servo_limits[ID_RIGHT]['min'] = raw_min_R + OFFSET_STEPS
-    servo_limits[ID_RIGHT]['max'] = raw_max_R - OFFSET_STEPS
+    # Map the limits to the physical CW and CCW walls based on orientation settings
+    for servo_id, lim_close, lim_open in [(ID_RIGHT, limit_close_R, limit_open_R), (ID_LEFT, limit_close_L, limit_open_L)]:
+        if CLOSE_DIR == 1: # Closing is Clockwise
+            servo_limits[servo_id]['cw'] = lim_close
+            servo_limits[servo_id]['ccw'] = lim_open
+        else:              # Closing is Counter-Clockwise
+            servo_limits[servo_id]['ccw'] = lim_close
+            servo_limits[servo_id]['cw'] = lim_open
     
     print("\n--- Calibration Complete ---")
-    print(f"Left  Safe Range: [{servo_limits[ID_LEFT]['min']} to {servo_limits[ID_LEFT]['max']}]")
-    print(f"Right Safe Range: [{servo_limits[ID_RIGHT]['min']} to {servo_limits[ID_RIGHT]['max']}]")
+    print(f"Left  Walls -> CW: {servo_limits[ID_LEFT]['cw']} | CCW: {servo_limits[ID_LEFT]['ccw']}")
+    print(f"Right Walls -> CW: {servo_limits[ID_RIGHT]['cw']} | CCW: {servo_limits[ID_RIGHT]['ccw']}")
 
     is_homed = True
     print("[SUCCESS] Homing Complete. Returning to manual control.")
@@ -244,6 +235,16 @@ def button_just_pressed(code, now_ms, name):
         last_toggle[name] = now_ms
         return True
     return False
+
+# -------------------------------------------------
+# MODULAR MATH LIMIT ENFORCEMENT
+# -------------------------------------------------
+def get_distance_to_wall(current_pos, wall_pos, direction):
+    """Calculates safe travel distance remaining before hitting the wall, handling 4095->0 wrap."""
+    if direction > 0: # Moving CW
+        return (wall_pos - current_pos) % 4096
+    else:             # Moving CCW
+        return (current_pos - wall_pos) % 4096
 
 # -------------------------------------------------
 # MAIN LOOP
@@ -323,7 +324,6 @@ def main():
                 left_x = JOY_STATE['axes'].get(AX_LEFT_X, 0.0)
                 
                 if single_stick_mode:
-                    # Both servos move in the same direction because of identical mounting orientation
                     speed_L = int(left_x * current_max)
                     speed_R = int(left_x * current_max)
                 else:
@@ -333,12 +333,23 @@ def main():
                     speed_L = int(left_x * current_max)
                     speed_R = int(right_x * current_max)
 
-            # --- SOFTWARE LIMIT ENFORCEMENT ---
-            if pos_L <= servo_limits[ID_LEFT]['max'] and speed_L > 0: speed_L = 0
-            if pos_L >= servo_limits[ID_LEFT]['min'] and speed_L < 0: speed_L = 0
-            
-            if pos_R >= servo_limits[ID_RIGHT]['max'] and speed_R > 0: speed_R = 0
-            if pos_R <= servo_limits[ID_RIGHT]['min'] and speed_R < 0: speed_R = 0
+            # --- SOFTWARE LIMIT ENFORCEMENT (Zero-Crossing Safe) ---
+            if is_homed:
+                # Left Servo Limits
+                if speed_L > 0: # Moving CW
+                    dist = get_distance_to_wall(pos_L, servo_limits[ID_LEFT]['cw'], 1)
+                    if dist <= OFFSET_STEPS or dist > 2048: speed_L = 0
+                elif speed_L < 0: # Moving CCW
+                    dist = get_distance_to_wall(pos_L, servo_limits[ID_LEFT]['ccw'], -1)
+                    if dist <= OFFSET_STEPS or dist > 2048: speed_L = 0
+
+                # Right Servo Limits
+                if speed_R > 0: # Moving CW
+                    dist = get_distance_to_wall(pos_R, servo_limits[ID_RIGHT]['cw'], 1)
+                    if dist <= OFFSET_STEPS or dist > 2048: speed_R = 0
+                elif speed_R < 0: # Moving CCW
+                    dist = get_distance_to_wall(pos_R, servo_limits[ID_RIGHT]['ccw'], -1)
+                    if dist <= OFFSET_STEPS or dist > 2048: speed_R = 0
 
             # --- Write to Servos ---
             packetHandler.WriteSpec(ID_LEFT, speed_L, ACCEL)

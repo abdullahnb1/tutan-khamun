@@ -31,13 +31,13 @@ sys.path.append("..")
 from scservo_sdk import *                 # Uses SC Servo SDK library
 
 # Default setting
-SCS_ID                      = 1                 # SC Servo ID : 1
+SCS_ID                      = 2                 # SC Servo ID : 1
 BAUDRATE                    = 1000000           # SC Servo default baudrate : 1000000
-DEVICENAME                  = 'COM67'    # Check which port is being used on your controller
+DEVICENAME                  = '/dev/ttyACM0'    # Check which port is being used on your controller
                                                 # ex) Windows: "COM1"   Linux: "/dev/ttyUSB0" Mac: "/dev/tty.usbserial-*"
-SCS_MINIMUM_POSITION_VALUE  = 0           # SC Servo will rotate between this value
-SCS_MAXIMUM_POSITION_VALUE  = 4095
-SCS_MOVING_SPEED            = 2400        # SC Servo moving speed
+SCS_MINIMUM_POSITION_VALUE  = 1000           # SC Servo will rotate between this value
+SCS_MAXIMUM_POSITION_VALUE  = 1500
+SCS_MOVING_SPEED            = 900        # SC Servo moving speed
 SCS_MOVING_ACC              = 50          # SC Servo moving acc
 
 index = 0

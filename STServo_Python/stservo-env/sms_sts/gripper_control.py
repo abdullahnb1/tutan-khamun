@@ -40,8 +40,8 @@ OFFSET_STEPS          = int((OFFSET_DEGREES / 360.0) * 4096)  # Convert degrees 
 # --- ORIENTATION SETTINGS ---
 # Since servos are mounted in the same orientation, they move together.
 # If Phase 1 opens the gripper instead of closing it, simply swap these two values (1 and -1).
-CLOSE_DIR = 1   # 1 = CW, -1 = CCW
-OPEN_DIR  = -1  # 1 = CW, -1 = CCW
+CLOSE_DIR = -1   # 1 = CW, -1 = CCW
+OPEN_DIR  = 1    # 1 = CW, -1 = CCW
 
 # Dictionary to store our safe operational limits (Updated by the homing sequence)
 servo_limits = {
@@ -175,7 +175,7 @@ def execute_homing(packetHandler):
     # Phase 1: Sequential Closing (Both moving in the CLOSE_DIR)
     print("\n--- Phase 1: Seeking Inner Limits (Sequential Closing) ---")
     print("Moving Right Servo (ID 1) to close position...")
-    limit1_R = drive_single_until_stop(packetHandler, ID_RIGHT, CLOSE_DIR) 
+    limit1_R = drive_single_until_stop(packetHandler, ID_RIGHT, OPEN_DIR) 
     time.sleep(0.5) # Let mechanical tension release
     
     print("Moving Left Servo (ID 2) to close position...")
@@ -184,7 +184,7 @@ def execute_homing(packetHandler):
     
     # Phase 2: Simultaneous Opening (Both moving in the OPEN_DIR)
     print("\n--- Phase 2: Seeking Outer Limits (Simultaneous Opening) ---")
-    limit2_L, limit2_R = drive_until_stop(packetHandler, OPEN_DIR, OPEN_DIR) 
+    limit2_L, limit2_R = drive_until_stop(packetHandler, OPEN_DIR, CLOSE_DIR) 
     time.sleep(0.5)
     
     # Calculate absolute Min and Max ranges for each servo based on the two walls they hit
@@ -334,8 +334,8 @@ def main():
                     speed_R = int(right_x * current_max)
 
             # --- SOFTWARE LIMIT ENFORCEMENT ---
-            if pos_L >= servo_limits[ID_LEFT]['max'] and speed_L > 0: speed_L = 0
-            if pos_L <= servo_limits[ID_LEFT]['min'] and speed_L < 0: speed_L = 0
+            if pos_L <= servo_limits[ID_LEFT]['max'] and speed_L > 0: speed_L = 0
+            if pos_L >= servo_limits[ID_LEFT]['min'] and speed_L < 0: speed_L = 0
             
             if pos_R >= servo_limits[ID_RIGHT]['max'] and speed_R > 0: speed_R = 0
             if pos_R <= servo_limits[ID_RIGHT]['min'] and speed_R < 0: speed_R = 0

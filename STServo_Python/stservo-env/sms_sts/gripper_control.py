@@ -19,8 +19,9 @@ from scservo_sdk import *
 DEVICENAME  = '/dev/ttyACM0'    # Check your port (ttyACM0 or ttyACM1)
 BAUDRATE    = 1000000
 
-ID_LEFT     = 1                 # Left Gripper Servo
-ID_RIGHT    = 2                 # Right Gripper Servo
+# Updated based on your configuration:
+ID_RIGHT    = 1                 # Right Gripper Servo
+ID_LEFT     = 2                 # Left Gripper Servo
 
 # -------------------------------------------------
 # DRIVE & LIMIT SETTINGS
@@ -48,13 +49,6 @@ is_homed = False
 # -------------------------------------------------
 # GAMEPAD DEFINITIONS (Linux evdev standards)
 # -------------------------------------------------
-# Modern controllers (Logitech in X-input mode, Xbox, PS) map their face 
-# buttons to cardinal directions in Linux:
-#   BTN_SOUTH = A (Xbox) / Cross (PS)     -> Bottom face button
-#   BTN_EAST  = B (Xbox) / Circle (PS)    -> Right face button
-#   BTN_NORTH = Y (Xbox) / Triangle (PS)  -> Top face button
-#   BTN_WEST  = X (Xbox) / Square (PS)    -> Left face button
-
 AX_LEFT_X  = ecodes.ABS_X
 AX_RIGHT_X = ecodes.ABS_RX
 AX_RIGHT_Z = ecodes.ABS_Z
@@ -76,7 +70,6 @@ last_toggle = {'quit': 0, 'r1': 0, 'l1': 0, 'mode': 0, 'home': 0}
 # -------------------------------------------------
 # TELEMETRY LOGGER SETUP
 # -------------------------------------------------
-# Make sure the 'datas' folder exists in your directory!
 os.makedirs("datas", exist_ok=True)
 LOG_FILE = f"datas/servo_telemetry_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
 
@@ -94,53 +87,71 @@ def log_telemetry(packetHandler, servo_id):
     temp, res_t, err = packetHandler.ReadTemper(servo_id)
     curr, res_c, err = packetHandler.ReadCurrent(servo_id)
 
-    # Ensure all reads were successful before logging
     if res_p == COMM_SUCCESS and res_l == COMM_SUCCESS:
         load_mag = abs(load) 
-        
         with open(LOG_FILE, mode='a', newline='') as file:
             writer = csv.writer(file)
             writer.writerow([time.time(), servo_id, pos, spd, load_mag, volt, temp, curr])
-        
         return pos, spd, load_mag
     return None, None, None
 
 # -------------------------------------------------
-# SENSORLESS HOMING LOGIC (Simultaneous & Opposing)
+# SENSORLESS HOMING LOGIC 
 # -------------------------------------------------
+def drive_single_until_stop(packetHandler, servo_id, direction):
+    """Drives a single servo until it hits a hard stop (current spike)."""
+    packetHandler.WriteSpec(servo_id, HOMING_SPEED * direction, ACCEL)
+    time.sleep(0.3) # Wait for initial starting inertia to settle
+    
+    spike_count = 0
+    pos_stop = None
+    
+    while True:
+        pos, spd, load = log_telemetry(packetHandler, servo_id)
+        if load is not None and load > HOMING_LOAD_THRESHOLD:
+            spike_count += 1
+            if spike_count >= 3:
+                packetHandler.WriteSpec(servo_id, 0, ACCEL) # Stop Servo
+                pos_stop = pos
+                dir_str = "CW" if direction > 0 else "CCW"
+                print(f"  > Servo ID {servo_id} hit {dir_str} hard stop at: {pos_stop}")
+                break
+        else:
+            spike_count = 0
+            
+        time.sleep(0.01)
+        
+    return pos_stop
+
 def drive_until_stop(packetHandler, dir_L, dir_R):
-    """Drives both servos simultaneously until they hit a hard stop (current spike)."""
-    # Start moving both servos
+    """Drives both servos simultaneously until they both hit a hard stop."""
     packetHandler.WriteSpec(ID_LEFT, HOMING_SPEED * dir_L, ACCEL)
     packetHandler.WriteSpec(ID_RIGHT, HOMING_SPEED * dir_R, ACCEL)
-    time.sleep(0.3) # Wait for initial starting inertia to settle
+    time.sleep(0.3)
     
     stop_L, stop_R = False, False
     spike_L, spike_R = 0, 0
     pos_L_stop, pos_R_stop = None, None
     
-    # Keep looping until BOTH servos have hit their respective walls
     while not (stop_L and stop_R):
-        # Check Left Servo
         if not stop_L:
             pos, spd, load = log_telemetry(packetHandler, ID_LEFT)
             if load is not None and load > HOMING_LOAD_THRESHOLD:
                 spike_L += 1
                 if spike_L >= 3:
-                    packetHandler.WriteSpec(ID_LEFT, 0, ACCEL) # Stop Left
+                    packetHandler.WriteSpec(ID_LEFT, 0, ACCEL)
                     pos_L_stop = pos
                     stop_L = True
                     print(f"  > Left  Servo hit hard stop at: {pos_L_stop}")
             else:
                 spike_L = 0
                 
-        # Check Right Servo
         if not stop_R:
             pos, spd, load = log_telemetry(packetHandler, ID_RIGHT)
             if load is not None and load > HOMING_LOAD_THRESHOLD:
                 spike_R += 1
                 if spike_R >= 3:
-                    packetHandler.WriteSpec(ID_RIGHT, 0, ACCEL) # Stop Right
+                    packetHandler.WriteSpec(ID_RIGHT, 0, ACCEL)
                     pos_R_stop = pos
                     stop_R = True
                     print(f"  > Right Servo hit hard stop at: {pos_R_stop}")
@@ -151,20 +162,25 @@ def drive_until_stop(packetHandler, dir_L, dir_R):
         
     return pos_L_stop, pos_R_stop
 
-
 def execute_homing(packetHandler):
     global is_homed, servo_limits
     print("\n\n[WARNING] Starting Sensorless Homing Sequence...")
-    print("Keep hands clear! Servos will seek hard stops simultaneously.")
+    print("Keep hands clear! Servos will seek hard stops.")
     
-    # Phase 1: Close Gripper (Left drives CCW, Right drives CW - Adjust signs if backwards)
-    print("\n--- Phase 1: Seeking Inner Limits (Closing) ---")
-    limit1_L, limit1_R = drive_until_stop(packetHandler, -1, 1)
+    # Phase 1: Sequential Closing
+    print("\n--- Phase 1: Seeking Inner Limits (Sequential) ---")
+    print("Moving Right Servo (ID 1) Clockwise...")
+    limit1_R = drive_single_until_stop(packetHandler, ID_RIGHT, 1)  # 1 = CW
     time.sleep(0.5) # Let mechanical tension release
     
-    # Phase 2: Open Gripper (Left drives CW, Right drives CCW)
-    print("\n--- Phase 2: Seeking Outer Limits (Opening) ---")
-    limit2_L, limit2_R = drive_until_stop(packetHandler, 1, -1)
+    print("Moving Left Servo (ID 2) Counter-Clockwise...")
+    limit1_L = drive_single_until_stop(packetHandler, ID_LEFT, -1)  # -1 = CCW
+    time.sleep(0.5)
+    
+    # Phase 2: Simultaneous Opening
+    # Since Right closed CW, it must open CCW (-1). Since Left closed CCW, it must open CW (1).
+    print("\n--- Phase 2: Seeking Outer Limits (Simultaneous) ---")
+    limit2_L, limit2_R = drive_until_stop(packetHandler, 1, -1) 
     time.sleep(0.5)
     
     # Calculate absolute Min and Max ranges for each servo based on the two walls they hit
@@ -275,12 +291,11 @@ def main():
             now_ms = time.time() * 1000.0
             poll_joystick(0.0)
 
-            # --- Read current positions & Log Telemetry ---
             pos_L, _, _ = log_telemetry(packetHandler, ID_LEFT)
             pos_R, _, _ = log_telemetry(packetHandler, ID_RIGHT)
             
             if pos_L is None or pos_R is None:
-                continue # Skip loop if telemetry read failed
+                continue
 
             # --- Check Buttons ---
             if button_just_pressed(BTN_SELECT, now_ms, 'home'):
@@ -314,9 +329,6 @@ def main():
                     speed_R = int(right_x * current_max)
 
             # --- SOFTWARE LIMIT ENFORCEMENT ---
-            # If position is outside safe bounds, only allow speeds that move it back inside.
-            # ST3215 math: Positive speed (+) = increases position (CW). Negative speed (-) = decreases position (CCW).
-            
             if pos_L >= servo_limits[ID_LEFT]['max'] and speed_L > 0: speed_L = 0
             if pos_L <= servo_limits[ID_LEFT]['min'] and speed_L < 0: speed_L = 0
             
@@ -328,7 +340,7 @@ def main():
             packetHandler.WriteSpec(ID_RIGHT, speed_R, ACCEL)
             
             PREV_BTN = set(JOY_STATE['btn'])
-            time.sleep(0.01) # 100Hz loop
+            time.sleep(0.01)
 
     except KeyboardInterrupt:
         pass

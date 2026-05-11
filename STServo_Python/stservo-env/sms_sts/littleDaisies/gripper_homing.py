@@ -4,41 +4,63 @@
 import time
 
 # --- HOMING SETTINGS ---
-HOMING_SPEED          = 800     
-HOMING_LOAD_THRESHOLD = 290     
-OFFSET_DEGREES        = 3.0     
-OFFSET_STEPS          = int((OFFSET_DEGREES / 360.0) * 4096)  
+HOMING_SPEED           = 800     
+HOMING_BASE_LOAD       = 150     # Ignore slope noise during free-spin (must be under some tension)
+HOMING_SLOPE_THRESHOLD = 200     # Minimum dLoad/dt (Load units per second) to trigger stop
+OFFSET_DEGREES         = 3.0     
+OFFSET_STEPS           = int((OFFSET_DEGREES / 360.0) * 4096)  
 
 # --- ORIENTATION SETTINGS ---
 CLOSE_DIR = -1   # -1 = CCW, 1 = CW
 OPEN_DIR  = 1    # 1 = CW, -1 = CCW
 
 def drive_single_until_stop(core, servo_id, direction, accel=50):
-    """Drives a single servo until it hits a hard stop (current spike)."""
+    """Drives a single servo until it hits a hard stop (detected by Load Slope)."""
     core.write_speed(servo_id, HOMING_SPEED * direction, accel)
     time.sleep(0.3) # Wait for initial starting inertia to settle
     
     spike_count = 0
     pos_stop = None
     
+    last_load = None
+    last_time = time.time()
+    
     while True:
         pos, spd, load = core.read_telemetry(servo_id)
-        if load is not None and load > HOMING_LOAD_THRESHOLD:
-            spike_count += 1
-            if spike_count >= 3:
-                core.stop(servo_id, accel)
-                pos_stop = pos
-                dir_str = "CW" if direction > 0 else "CCW"
-                print(f"  > Servo ID {servo_id} hit {dir_str} hard stop at: {pos_stop}")
-                break
-        else:
-            spike_count = 0
+        current_time = time.time()
+        
+        if load is not None:
+            if last_load is not None:
+                dt = current_time - last_time
+                if dt > 0:
+                    # Calculate the derivative: change in load over change in time
+                    load_slope = (load - last_load) / dt
+                    
+                    # Check if we are under tension AND spiking rapidly
+                    if load > HOMING_BASE_LOAD and load_slope > HOMING_SLOPE_THRESHOLD:
+                        spike_count += 1
+                        
+                        # Require 2 CONSECUTIVE spikes to filter out mechanical snags/bumps
+                        if spike_count >= 2:
+                            core.stop(servo_id, accel)
+                            pos_stop = pos
+                            dir_str = "CW" if direction > 0 else "CCW"
+                            print(f"  > Servo ID {servo_id} hit {dir_str} hard stop at: {pos_stop} (Slope: {load_slope:.1f})")
+                            break
+                    else:
+                        # Reset if it was just a momentary snag
+                        spike_count = 0
+            
+            last_load = load
+            last_time = current_time
+            
         time.sleep(0.01)
         
     return pos_stop
 
+
 def drive_until_stop(core, id_left, id_right, dir_L, dir_R, accel=50):
-    """Drives both servos simultaneously until they both hit a hard stop."""
+    """Drives both servos simultaneously until they both hit a hard stop (detected by Load Slope)."""
     core.write_speed(id_left, HOMING_SPEED * dir_L, accel)
     core.write_speed(id_right, HOMING_SPEED * dir_R, accel)
     time.sleep(0.3)
@@ -47,43 +69,67 @@ def drive_until_stop(core, id_left, id_right, dir_L, dir_R, accel=50):
     spike_L, spike_R = 0, 0
     pos_L_stop, pos_R_stop = None, None
     
+    last_load_L, last_load_R = None, None
+    last_time_L, last_time_R = time.time(), time.time()
+    
     while not (stop_L and stop_R):
+        current_time = time.time()
+        
+        # Check Left Servo
         if not stop_L:
             pos, spd, load = core.read_telemetry(id_left)
-            if load is not None and load > HOMING_LOAD_THRESHOLD:
-                spike_L += 1
-                if spike_L >= 3:
-                    core.stop(id_left, accel)
-                    pos_L_stop = pos
-                    stop_L = True
-                    print(f"  > Left  Servo hit hard stop at: {pos_L_stop}")
-            else:
-                spike_L = 0
+            if load is not None:
+                if last_load_L is not None:
+                    dt = current_time - last_time_L
+                    if dt > 0:
+                        slope = (load - last_load_L) / dt
+                        if load > HOMING_BASE_LOAD and slope > HOMING_SLOPE_THRESHOLD:
+                            spike_L += 1
+                            if spike_L >= 2:
+                                core.stop(id_left, accel)
+                                pos_L_stop = pos
+                                stop_L = True
+                                print(f"  > Left  Servo hit hard stop at: {pos_L_stop} (Slope: {slope:.1f})")
+                        else:
+                            spike_L = 0
+                last_load_L = load
+                last_time_L = current_time
                 
+        # Check Right Servo
+        current_time = time.time() # Refresh time for accurate dt
         if not stop_R:
             pos, spd, load = core.read_telemetry(id_right)
-            if load is not None and load > HOMING_LOAD_THRESHOLD:
-                spike_R += 1
-                if spike_R >= 3:
-                    core.stop(id_right, accel)
-                    pos_R_stop = pos
-                    stop_R = True
-                    print(f"  > Right Servo hit hard stop at: {pos_R_stop}")
-            else:
-                spike_R = 0
+            if load is not None:
+                if last_load_R is not None:
+                    dt = current_time - last_time_R
+                    if dt > 0:
+                        slope = (load - last_load_R) / dt
+                        if load > HOMING_BASE_LOAD and slope > HOMING_SLOPE_THRESHOLD:
+                            spike_R += 1
+                            if spike_R >= 2:
+                                core.stop(id_right, accel)
+                                pos_R_stop = pos
+                                stop_R = True
+                                print(f"  > Right Servo hit hard stop at: {pos_R_stop} (Slope: {slope:.1f})")
+                        else:
+                            spike_R = 0
+                last_load_R = load
+                last_time_R = current_time
+                
         time.sleep(0.01)
         
     return pos_L_stop, pos_R_stop
 
+
 def execute_homing(core, id_left, id_right):
     """Executes the full Tutan-Khamun sequential close / simultaneous open sequence."""
-    print("\n\n[WARNING] Starting Sensorless Homing Sequence...")
+    print("\n\n[WARNING] Starting Derivative Sensorless Homing Sequence...")
     print("Keep hands clear! Servos will seek hard stops.")
     
     # Phase 1: Sequential Closing
     print("\n--- Phase 1: Seeking Inner Limits (Sequential Closing) ---")
     print(f"Moving Right Servo (ID {id_right}) to close position...")
-    limit_close_R = drive_single_until_stop(core, id_right, OPEN_DIR) 
+    limit_close_R = drive_single_until_stop(core, id_right, CLOSE_DIR) 
     time.sleep(0.5) 
     
     print(f"Moving Left Servo (ID {id_left}) to close position...")
@@ -92,7 +138,7 @@ def execute_homing(core, id_left, id_right):
     
     # Phase 2: Simultaneous Opening
     print("\n--- Phase 2: Seeking Outer Limits (Simultaneous Opening) ---")
-    limit_open_L, limit_open_R = drive_until_stop(core, id_left, id_right, OPEN_DIR, CLOSE_DIR) 
+    limit_open_L, limit_open_R = drive_until_stop(core, id_left, id_right, OPEN_DIR, OPEN_DIR) 
     time.sleep(0.5)
     
     # Map limits to physical CW and CCW walls based on orientation
@@ -129,16 +175,12 @@ if __name__ == "__main__":
     ID_RIGHT = 1
     ID_LEFT  = 2
     
-    print("--- Tutan-Khamun Homing Routine Test ---")
+    print("--- Tutan-Khamun Derivative Homing Routine Test ---")
     try:
-        # Initialize the core hardware layer
         core = ST3215Core(port='/dev/ttyACM0', baudrate=1000000)
-        
-        # Servos must be in wheel mode to drive using velocity commands
         core.set_wheel_mode(ID_LEFT)
         core.set_wheel_mode(ID_RIGHT)
         
-        # Run the sequence
         final_limits = execute_homing(core, ID_LEFT, ID_RIGHT)
         
     except Exception as e:

@@ -8,7 +8,7 @@ import csv
 from datetime import datetime
 
 # Import the Waveshare SDK
-sys.path.append("..")
+sys.path.append("../..")
 from scservo_sdk import *
 
 class ST3215Core:

@@ -16,28 +16,47 @@ ID_RIGHT    = 1
 ID_LEFT     = 2                 
 MAX_SPEED   = 2400
 ACCEL       = 50
-DEADZONE    = 0.15
+#DEADZONE    = 0.15
 LEVEL       = 2
 DEBOUNCE_MS = 250
 
 # -------------------------------------------------
 # GAMEPAD DEFINITIONS
 # -------------------------------------------------
-AX_LEFT_X  = ecodes.ABS_X
-AX_RIGHT_X = ecodes.ABS_RX
-AX_RIGHT_Z = ecodes.ABS_Z
+#AX_LEFT_X  = ecodes.ABS_X
+#AX_RIGHT_X = ecodes.ABS_RX
+#AX_RIGHT_Z = ecodes.ABS_Z
 
-BTN_SQUARE   = ecodes.BTN_WEST    
-BTN_CROSS    = ecodes.BTN_SOUTH   
-BTN_TRIANGLE = ecodes.BTN_NORTH   
-BTN_L1       = ecodes.BTN_TL      
-BTN_R1       = ecodes.BTN_TR      
-BTN_SELECT   = ecodes.BTN_SELECT  
+#BTN_SQUARE   = ecodes.BTN_WEST    
+#BTN_CROSS    = ecodes.BTN_SOUTH   
+#BTN_TRIANGLE = ecodes.BTN_NORTH   
+#BTN_L1       = ecodes.BTN_TL      
+#BTN_R1       = ecodes.BTN_TR      
+#BTN_SELECT   = ecodes.BTN_SELECT  
 
 JOY = None
 JOY_STATE = {'axes': {}, 'btn': set()}
 PREV_BTN = set()
 last_toggle = {'quit': 0, 'r1': 0, 'l1': 0, 'mode': 0, 'home': 0}
+
+DEADZONE    = 0.08
+
+# -------------------------------------------------
+# GAMEPAD DEFINITIONS (Custom Calibrated)
+# -------------------------------------------------
+AX_LEFT_X  = 0
+AX_RIGHT_X = 2
+AX_RIGHT_Z = 2       # Logitech fallback
+
+BTN_SQUARE   = 304       # Quit
+BTN_CROSS    = 305       # Emergency Brake
+BTN_TRIANGLE = 307       # Toggle 1-Stick/2-Stick
+BTN_CIRCLE   = 306       # Unused currently
+BTN_L1       = 308       # Decrease Speed
+BTN_R1       = 309       # Increase Speed
+BTN_SELECT   = 312       # Manual Homing
+
+
 
 # -------------------------------------------------
 # JOYSTICK LOGIC

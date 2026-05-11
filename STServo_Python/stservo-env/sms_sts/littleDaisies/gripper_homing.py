@@ -5,7 +5,7 @@ import time
 
 # --- HOMING SETTINGS ---
 HOMING_SPEED          = 800     
-HOMING_LOAD_THRESHOLD = 370     
+HOMING_LOAD_THRESHOLD = 290     
 OFFSET_DEGREES        = 3.0     
 OFFSET_STEPS          = int((OFFSET_DEGREES / 360.0) * 4096)  
 

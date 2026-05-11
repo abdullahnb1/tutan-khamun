@@ -6,7 +6,7 @@ import time
 # --- HOMING SETTINGS ---
 HOMING_SPEED           = 800     
 HOMING_BASE_LOAD       = 150     # Ignore slope noise during free-spin (must be under some tension)
-HOMING_SLOPE_THRESHOLD = 200     # Minimum dLoad/dt to trigger stop
+HOMING_SLOPE_THRESHOLD = 160     # Minimum dLoad/dt to trigger stop
 OFFSET_DEGREES         = 3.0     
 OFFSET_STEPS           = int((OFFSET_DEGREES / 360.0) * 4096)  
 
@@ -71,22 +71,22 @@ def execute_homing(core, id_left, id_right):
     # PHASE 1: Sequential Closing (Using Load Slope Detection)
     # =======================================================
     print("\n--- Phase 1: Seeking Inner Limits (Sequential Closing) ---")
+    print(f"Moving Left Servo (ID {id_left}) to close position...")
+    limit_close_L = drive_single_until_stop(core, id_left, CLOSE_DIR) 
+    time.sleep(0.5)
+
     print(f"Moving Right Servo (ID {id_right}) to close position...")
     limit_close_R = drive_single_until_stop(core, id_right, OPEN_DIR) 
     time.sleep(0.5) 
     
-    print(f"Moving Left Servo (ID {id_left}) to close position...")
-    limit_close_L = drive_single_until_stop(core, id_left, CLOSE_DIR) 
-    time.sleep(0.5)
     
-    # =======================================================
     # PHASE 2: Simultaneous Opening (Exact 45 Degree Math)
     # =======================================================
     print(f"\n--- Phase 2: Opening exactly {OPEN_TARGET_DEGREES} degrees ---")
     
     # Calculate the exact mathematical open limits based on the closed walls
     limit_open_L = int((limit_close_L + (OPEN_DIR * OPEN_TARGET_STEPS)) % 4096)
-    limit_open_R = int((limit_close_R + (CLOSE_DIR * OPEN_TARGET_STEPS)) % 4096)
+    limit_open_R = int((limit_close_R - (CLOSE_DIR * OPEN_TARGET_STEPS)) % 4096)
     
     # Start driving both servos in their respective opening directions
     core.write_speed(id_left, HOMING_SPEED * OPEN_DIR, 50)

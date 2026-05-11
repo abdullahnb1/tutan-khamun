@@ -129,7 +129,7 @@ def execute_homing(core, id_left, id_right):
     # Phase 1: Sequential Closing
     print("\n--- Phase 1: Seeking Inner Limits (Sequential Closing) ---")
     print(f"Moving Right Servo (ID {id_right}) to close position...")
-    limit_close_R = drive_single_until_stop(core, id_right, CLOSE_DIR) 
+    limit_close_R = drive_single_until_stop(core, id_right, OPEN_DIR) 
     time.sleep(0.5) 
     
     print(f"Moving Left Servo (ID {id_left}) to close position...")
@@ -138,7 +138,7 @@ def execute_homing(core, id_left, id_right):
     
     # Phase 2: Simultaneous Opening
     print("\n--- Phase 2: Seeking Outer Limits (Simultaneous Opening) ---")
-    limit_open_L, limit_open_R = drive_until_stop(core, id_left, id_right, OPEN_DIR, OPEN_DIR) 
+    limit_open_L, limit_open_R = drive_until_stop(core, id_left, id_right, OPEN_DIR, CLOSE_DIR) 
     time.sleep(0.5)
     
     # Map limits to physical CW and CCW walls based on orientation

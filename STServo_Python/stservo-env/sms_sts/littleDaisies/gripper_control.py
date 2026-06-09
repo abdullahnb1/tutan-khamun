@@ -12,8 +12,8 @@ from gripper_homing import execute_homing, OFFSET_STEPS
 # -------------------------------------------------
 # OPERATIONAL SETTINGS
 # -------------------------------------------------
-ID_RIGHT    = 1                 
-ID_LEFT     = 2                 
+ID_RIGHT    = 4                 
+ID_LEFT     = 3                 
 MAX_SPEED   = 2400
 ACCEL       = 50
 #DEADZONE    = 0.15
@@ -134,7 +134,8 @@ def main():
         return
 
     # --- AUTO-HOME ON STARTUP ---
-    servo_limits = execute_homing(core, ID_LEFT, ID_RIGHT)
+    #servo homing method, turn on when it is working
+    #servo_limits = execute_homing(core, ID_LEFT, ID_RIGHT)
     is_homed = True
 
     print(f"""
@@ -192,22 +193,22 @@ def main():
                     speed_R = int(right_x * current_max)
 
             # --- SOFTWARE LIMIT ENFORCEMENT (Zero-Crossing Safe) ---
-            if is_homed:
+            #if is_homed:
                 # Left Servo Limits
-                if speed_L > 0: 
-                    dist = get_distance_to_wall(pos_L, servo_limits[ID_LEFT]['cw'], 1)
-                    if dist <= OFFSET_STEPS or dist > 2048: speed_L = 0
-                elif speed_L < 0: 
-                    dist = get_distance_to_wall(pos_L, servo_limits[ID_LEFT]['ccw'], -1)
-                    if dist <= OFFSET_STEPS or dist > 2048: speed_L = 0
+            #    if speed_L > 0: 
+            #        dist = get_distance_to_wall(pos_L, servo_limits[ID_LEFT]['cw'], 1)
+            #        if dist <= OFFSET_STEPS or dist > 2048: speed_L = 0
+            #    elif speed_L < 0: 
+            #        dist = get_distance_to_wall(pos_L, servo_limits[ID_LEFT]['ccw'], -1)
+            #        if dist <= OFFSET_STEPS or dist > 2048: speed_L = 0
 
                 # Right Servo Limits
-                if speed_R > 0: 
-                    dist = get_distance_to_wall(pos_R, servo_limits[ID_RIGHT]['cw'], 1)
-                    if dist <= OFFSET_STEPS or dist > 2048: speed_R = 0
-                elif speed_R < 0: 
-                    dist = get_distance_to_wall(pos_R, servo_limits[ID_RIGHT]['ccw'], -1)
-                    if dist <= OFFSET_STEPS or dist > 2048: speed_R = 0
+            #    if speed_R > 0: 
+            #        dist = get_distance_to_wall(pos_R, servo_limits[ID_RIGHT]['cw'], 1)
+            #        if dist <= OFFSET_STEPS or dist > 2048: speed_R = 0
+            #    elif speed_R < 0: 
+            #        dist = get_distance_to_wall(pos_R, servo_limits[ID_RIGHT]['ccw'], -1)
+            #        if dist <= OFFSET_STEPS or dist > 2048: speed_R = 0
 
             # --- Write to Servos ---
             core.write_speed(ID_LEFT, speed_L, ACCEL)
